@@ -1,0 +1,19 @@
+# Compilación
+target/
+*.class
+
+# Editores
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+
+# Logs y archivos del sistema
+*.log
+.DS_Store
+Thumbs.db
+
+# Datos locales
+application-local.properties

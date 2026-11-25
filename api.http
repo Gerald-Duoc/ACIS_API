@@ -1,0 +1,324 @@
+### ===========================================================================
+### Pruebas de la API de ACIS desde VS Code
+### Requiere la extensión "REST Client" (humao.rest-client).
+### Presiona "Send Request" sobre cada petición, de arriba hacia abajo.
+### ===========================================================================
+
+@baseUrl = http://localhost:8080
+# Para probar a través del Port Forwarding de VS Code, cambia la línea de arriba por la
+# dirección que te muestra el panel Ports, por ejemplo:
+# @baseUrl = https://xxxxxxxx-8080.brs.devtunnels.ms
+
+
+### 0) ¿Está viva la API? (no necesita sesión)
+GET {{baseUrl}}/api/salud
+
+
+### ===========================================================================
+### 1) INICIAR SESIÓN (HU-01) - cada perfil guarda su token
+### ===========================================================================
+
+# @name loginPlanificador
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{ "correo": "planificador@acis.cl", "clave": "1234" }
+
+###
+@tokenPlanificador = {{loginPlanificador.response.body.$.token}}
+
+
+# @name loginTecnico
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{ "correo": "tecnico@acis.cl", "clave": "1234" }
+
+###
+@tokenTecnico = {{loginTecnico.response.body.$.token}}
+
+
+# @name loginCliente
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{ "correo": "cliente@acis.cl", "clave": "1234" }
+
+###
+@tokenCliente = {{loginCliente.response.body.$.token}}
+
+
+### Credenciales incorrectas -> 401 con mensaje de error
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{ "correo": "tecnico@acis.cl", "clave": "mala" }
+
+
+### Quién soy
+GET {{baseUrl}}/api/auth/me
+Authorization: Bearer {{tokenTecnico}}
+
+
+### ===========================================================================
+### 2) CATASTRO (planificador): clientes, locales, equipos, técnicos
+### ===========================================================================
+
+### Clientes con sus locales y equipos (HU-32, HU-36)
+GET {{baseUrl}}/api/clientes
+Authorization: Bearer {{tokenPlanificador}}
+
+
+### Nuevo cliente con su SLA en horas (HU-32, HU-36)
+POST {{baseUrl}}/api/clientes
+Authorization: Bearer {{tokenPlanificador}}
+Content-Type: application/json
+
+{ "nombre": "Farmacias del Sur", "contacto": "Luis Rojas · lrojas@fsur.cl", "slaHoras": 5 }
+
+
+### Nuevo local (HU-33). Cambia el 4 por el id del cliente que se creó arriba.
+# Las coordenadas se usan para consultar el clima real.
+POST {{baseUrl}}/api/clientes/4/locales
+Authorization: Bearer {{tokenPlanificador}}
+Content-Type: application/json
+
+{ "nombre": "Tienda Centro", "direccion": "Av. Siempre Viva 742", "latitud": -33.45, "longitud": -70.66 }
+
+
+### Nuevo equipo (HU-34). Cambia el 5 por el id del local.
+POST {{baseUrl}}/api/locales/5/equipos
+Authorization: Bearer {{tokenPlanificador}}
+Content-Type: application/json
+
+{ "nombre": "Split 12", "tipo": "Split", "marca": "ClimaTec", "modelo": "SP-12", "exterior": false }
+
+
+### Técnicos y su carga de trabajo (HU-02, HU-08)
+GET {{baseUrl}}/api/tecnicos
+Authorization: Bearer {{tokenPlanificador}}
+
+
+### Nuevo técnico (HU-02). Si el correo ya existe responde 409. Clave inicial: 1234
+POST {{baseUrl}}/api/tecnicos
+Authorization: Bearer {{tokenPlanificador}}
+Content-Type: application/json
+
+{ "nombre": "Ana Torres", "correo": "atorres@acis.cl" }
+
+
+### Historial de un equipo (HU-35). Cambia el 1 por el id de un equipo.
+GET {{baseUrl}}/api/equipos/1/historial
+Authorization: Bearer {{tokenPlanificador}}
+
+
+### ===========================================================================
+### 3) CLIMA REAL (HU-29, HU-30, HU-31)
+### ===========================================================================
+
+### Por coordenadas (Santiago). exterior=true hace que se marque alerta si llueve o hay viento fuerte.
+GET {{baseUrl}}/api/clima?lat=-33.45&lon=-70.66&fecha={{$datetime "YYYY-MM-DD" 1 d}}&exterior=true
+Authorization: Bearer {{tokenPlanificador}}
+
+
+### Por local (al agendar una OT). Cambia el 1 por el id de un local.
+GET {{baseUrl}}/api/clima/locales/1?fecha={{$datetime "YYYY-MM-DD" 2 d}}&exterior=true
+Authorization: Bearer {{tokenPlanificador}}
+
+
+### ===========================================================================
+### 4) PLANIFICADOR: crear, asignar y reprogramar OT (HU-06 a HU-12)
+### ===========================================================================
+
+### Todas las OT, con filtros opcionales: estado, tecnicoId, clienteId, fecha
+GET {{baseUrl}}/api/ordenes
+Authorization: Bearer {{tokenPlanificador}}
+
+###
+GET {{baseUrl}}/api/ordenes?estado=ASIGNADA
+Authorization: Bearer {{tokenPlanificador}}
+
+
+### Crear una OT (HU-06, HU-07, HU-08). Cambia equipoId y tecnicoId por ids reales.
+# @name crearOrden
+POST {{baseUrl}}/api/ordenes
+Authorization: Bearer {{tokenPlanificador}}
+Content-Type: application/json
+
+{
+  "equipoId": 1,
+  "tipo": "Correctiva",
+  "prioridad": "ALTA",
+  "fecha": "{{$datetime "YYYY-MM-DD" 1 d}}",
+  "tecnicoId": 1,
+  "descripcion": "El equipo no enfría"
+}
+
+###
+@ordenId = {{crearOrden.response.body.$.id}}
+
+
+### Reasignar a otro técnico (HU-09)
+PUT {{baseUrl}}/api/ordenes/{{ordenId}}/asignacion
+Authorization: Bearer {{tokenPlanificador}}
+Content-Type: application/json
+
+{ "tecnicoId": 2 }
+
+
+### Reprogramar (HU-10)
+PUT {{baseUrl}}/api/ordenes/{{ordenId}}/fecha
+Authorization: Bearer {{tokenPlanificador}}
+Content-Type: application/json
+
+{ "fecha": "{{$datetime "YYYY-MM-DD" 3 d}}" }
+
+
+### ===========================================================================
+### 5) TÉCNICO EN TERRENO (HU-13 a HU-25)
+### Para seguir este ciclo, la OT debe estar asignada al técnico que inició sesión (tecnico@acis.cl, id 1).
+### Reasigna la OT al técnico 1 antes de empezar.
+### ===========================================================================
+
+### Mis OT (HU-13)
+GET {{baseUrl}}/api/ordenes
+Authorization: Bearer {{tokenTecnico}}
+
+
+### Detalle (HU-14)
+GET {{baseUrl}}/api/ordenes/{{ordenId}}
+Authorization: Bearer {{tokenTecnico}}
+
+
+### Aceptar (HU-15)
+POST {{baseUrl}}/api/ordenes/{{ordenId}}/aceptar
+Authorization: Bearer {{tokenTecnico}}
+
+
+### Rechazar con motivo obligatorio (HU-16) - si la rechazas, vuelve a Pendiente de asignación
+POST {{baseUrl}}/api/ordenes/{{ordenId}}/rechazo
+Authorization: Bearer {{tokenTecnico}}
+Content-Type: application/json
+
+{ "motivo": "Tengo otra visita urgente" }
+
+
+### Check-in: solo si el técnico autoriza el uso de su ubicación (HU-05, HU-17)
+POST {{baseUrl}}/api/ordenes/{{ordenId}}/check-in
+Authorization: Bearer {{tokenTecnico}}
+Content-Type: application/json
+
+{ "ubicacionAutorizada": true }
+
+
+### Diagnóstico, actividades y materiales (HU-18, HU-19, HU-22)
+PUT {{baseUrl}}/api/ordenes/{{ordenId}}/registro
+Authorization: Bearer {{tokenTecnico}}
+Content-Type: application/json
+
+{
+  "diagnostico": "Compresor sin carga",
+  "actividades": ["Cambio de compresor", "Prueba de funcionamiento"],
+  "materiales": ["Compresor × 1"]
+}
+
+
+### Foto ANTES (HU-20): se guarda en la base de datos. Usa la imagen foto-prueba.jpg de esta carpeta.
+# @name fotoAntes
+POST {{baseUrl}}/api/ordenes/{{ordenId}}/fotos
+Authorization: Bearer {{tokenTecnico}}
+Content-Type: multipart/form-data; boundary=LimiteAcis
+
+--LimiteAcis
+Content-Disposition: form-data; name="tipo"
+
+ANTES
+--LimiteAcis
+Content-Disposition: form-data; name="archivo"; filename="antes.jpg"
+Content-Type: image/jpeg
+
+< ./foto-prueba.jpg
+--LimiteAcis--
+
+###
+@fotoId = {{fotoAntes.response.body.$.id}}
+
+
+### Foto DESPUÉS (HU-21)
+POST {{baseUrl}}/api/ordenes/{{ordenId}}/fotos
+Authorization: Bearer {{tokenTecnico}}
+Content-Type: multipart/form-data; boundary=LimiteAcis
+
+--LimiteAcis
+Content-Disposition: form-data; name="tipo"
+
+DESPUES
+--LimiteAcis
+Content-Disposition: form-data; name="archivo"; filename="despues.jpg"
+Content-Type: image/jpeg
+
+< ./foto-prueba.jpg
+--LimiteAcis--
+
+
+### Fotos de la OT (solo datos, sin la imagen)
+GET {{baseUrl}}/api/ordenes/{{ordenId}}/fotos
+Authorization: Bearer {{tokenTecnico}}
+
+
+### Descargar la imagen
+GET {{baseUrl}}/api/fotos/{{fotoId}}
+Authorization: Bearer {{tokenTecnico}}
+
+
+### Reportar un imprevisto (HU-23) - alternativa a cerrar la OT
+POST {{baseUrl}}/api/ordenes/{{ordenId}}/imprevisto
+Authorization: Bearer {{tokenTecnico}}
+Content-Type: application/json
+
+{ "motivo": "Local cerrado" }
+
+
+### Check-out y tiempo de atención (HU-24)
+POST {{baseUrl}}/api/ordenes/{{ordenId}}/check-out
+Authorization: Bearer {{tokenTecnico}}
+
+
+### Cerrar la OT (HU-25). Si falta algo, la API responde 400 diciendo qué falta.
+POST {{baseUrl}}/api/ordenes/{{ordenId}}/cierre
+Authorization: Bearer {{tokenTecnico}}
+
+
+### ===========================================================================
+### 6) CLIENTE (HU-40 a HU-43)
+### ===========================================================================
+
+### Mi local y mis equipos
+GET {{baseUrl}}/api/mi-local
+Authorization: Bearer {{tokenCliente}}
+
+
+### Solicitar una mantención (HU-40). Cambia equipoId por un equipo de tu local.
+POST {{baseUrl}}/api/ordenes/solicitud
+Authorization: Bearer {{tokenCliente}}
+Content-Type: application/json
+
+{ "equipoId": 1, "descripcion": "Gotea agua" }
+
+
+### Mis OT (HU-41): solo las de mi local
+GET {{baseUrl}}/api/ordenes
+Authorization: Bearer {{tokenCliente}}
+
+
+### Aprobar el trabajo (HU-42) - la OT debe estar Cerrada
+POST {{baseUrl}}/api/ordenes/{{ordenId}}/aprobacion
+Authorization: Bearer {{tokenCliente}}
+
+
+### Rechazar el trabajo con comentario obligatorio (HU-43) - alternativa a aprobar
+POST {{baseUrl}}/api/ordenes/{{ordenId}}/observacion
+Authorization: Bearer {{tokenCliente}}
+Content-Type: application/json
+
+{ "comentario": "Falta limpiar el área de trabajo" }
